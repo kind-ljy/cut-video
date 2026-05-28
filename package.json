@@ -1,0 +1,20 @@
+{
+  "name": "cut-video",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace apps/server run dev",
+    "dev:web": "npm --workspace apps/web run dev",
+    "build": "npm --workspace apps/web run build",
+    "setup": "bash scripts/setup.sh",
+    "start": "bash scripts/start.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
