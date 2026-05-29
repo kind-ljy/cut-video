@@ -107,7 +107,17 @@ function parseSilenceLog(log: string, totalDuration: number): [number, number][]
  * - bgmPath / bgmVolume: 背景音乐,可选
  * - keepOriginalAudio: 是否保留原声
  * - burnSubtitle: 是否烧录字幕
+ * - watermarks: 要去除的矩形区域(像素坐标,基于源视频)
  */
+export interface WatermarkRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 'delogo' = 用周边像素插值修复;'blur' = 高斯模糊遮挡;'pixelate' = 马赛克 */
+  method?: 'delogo' | 'blur' | 'pixelate';
+}
+
 export interface RenderOptions {
   input: string;
   output: string;
@@ -117,7 +127,59 @@ export interface RenderOptions {
   bgmPath?: string | null;
   bgmVolume?: number; // 0..1
   keepOriginalAudio?: boolean;
+  watermarks?: WatermarkRegion[];
   jobId?: string;
+}
+
+/**
+ * 把多个 watermark 区域转成一串串行的 ffmpeg 滤镜
+ * 输入 label = inLabel,输出 label = outLabel
+ */
+function buildWatermarkFilters(
+  regions: WatermarkRegion[],
+  inLabel: string,
+  outLabel: string,
+  videoW: number,
+  videoH: number
+): string[] {
+  if (regions.length === 0) return [`${inLabel}null${outLabel}`];
+
+  const parts: string[] = [];
+  let cur = inLabel;
+  regions.forEach((r, idx) => {
+    // clamp 到画面内,且 delogo 要求至少 1px 离边
+    const x = Math.max(1, Math.floor(r.x));
+    const y = Math.max(1, Math.floor(r.y));
+    const w = Math.max(1, Math.min(Math.floor(r.w), videoW - x - 1));
+    const h = Math.max(1, Math.min(Math.floor(r.h), videoH - y - 1));
+    const next = idx === regions.length - 1 ? outLabel : `[wm${idx}]`;
+    const method = r.method ?? 'delogo';
+
+    if (method === 'delogo') {
+      parts.push(`${cur}delogo=x=${x}:y=${y}:w=${w}:h=${h}:show=0${next}`);
+    } else if (method === 'blur') {
+      // 用 split + crop + boxblur + overlay 实现"局部模糊"
+      const tmpA = `[wma${idx}]`, tmpB = `[wmb${idx}]`, tmpC = `[wmc${idx}]`;
+      parts.push(
+        `${cur}split=2${tmpA}${tmpB}`,
+        `${tmpB}crop=${w}:${h}:${x}:${y},boxblur=20:1${tmpC}`,
+        `${tmpA}${tmpC}overlay=${x}:${y}${next}`
+      );
+    } else if (method === 'pixelate') {
+      const tmpA = `[wma${idx}]`, tmpB = `[wmb${idx}]`, tmpC = `[wmc${idx}]`;
+      // 缩小再放大形成马赛克
+      const px = Math.max(8, Math.floor(Math.min(w, h) / 16));
+      const sw = Math.max(1, Math.floor(w / px));
+      const sh = Math.max(1, Math.floor(h / px));
+      parts.push(
+        `${cur}split=2${tmpA}${tmpB}`,
+        `${tmpB}crop=${w}:${h}:${x}:${y},scale=${sw}:${sh},scale=${w}:${h}:flags=neighbor${tmpC}`,
+        `${tmpA}${tmpC}overlay=${x}:${y}${next}`
+      );
+    }
+    cur = next;
+  });
+  return parts;
 }
 
 export async function renderVideo(opts: RenderOptions) {
@@ -126,10 +188,15 @@ export async function renderVideo(opts: RenderOptions) {
     subtitlePath, burnSubtitle = true,
     bgmPath, bgmVolume = 0.3,
     keepOriginalAudio = true,
+    watermarks = [],
     jobId,
   } = opts;
 
   if (segments.length === 0) throw new Error('保留片段为空');
+
+  // 渲染前先 probe 一次拿宽高,保证 watermark 坐标 clamp 正确
+  const meta = await ffprobe(input);
+  const videoW = meta.width, videoH = meta.height;
 
   // 构建滤镜:用 trim 切多段后 concat
   const videoTrims: string[] = [];
@@ -139,16 +206,18 @@ export async function renderVideo(opts: RenderOptions) {
     audioTrims.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[a${i}]`);
   });
   const vConcat = segments.map((_, i) => `[v${i}]`).join('') +
-    `concat=n=${segments.length}:v=1:a=0[vout0]`;
+    `concat=n=${segments.length}:v=1:a=0[vcat]`;
   const aConcat = segments.map((_, i) => `[a${i}]`).join('') +
     `concat=n=${segments.length}:v=0:a=1[aout0]`;
 
   const filterParts: string[] = [...videoTrims, ...audioTrims, vConcat, aConcat];
 
+  // 去水印(在剪辑后、字幕烧录前)
+  filterParts.push(...buildWatermarkFilters(watermarks, '[vcat]', '[vout0]', videoW, videoH));
+
   // 字幕烧录
   let videoOut = '[vout0]';
   if (subtitlePath && burnSubtitle) {
-    // ffmpeg subtitles 滤镜需要单引号转义
     const escaped = subtitlePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:');
     filterParts.push(
       `[vout0]subtitles='${escaped}':force_style='FontName=PingFang SC,FontSize=22,PrimaryColour=&Hffffff,OutlineColour=&H000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=40'[vout]`
@@ -176,7 +245,6 @@ export async function renderVideo(opts: RenderOptions) {
     }
     audioOut = '[aout]';
   } else if (!keepOriginalAudio) {
-    // 全静音
     filterParts.push(`[aout0]volume=0[aout]`);
     audioOut = '[aout]';
   }
@@ -195,7 +263,6 @@ export async function renderVideo(opts: RenderOptions) {
   );
 
   const child = execa('ffmpeg', args);
-  // 进度从 stderr 解析
   let totalSec = segments.reduce((s, [a, b]) => s + (b - a), 0);
   child.stderr?.on('data', (chunk) => {
     const text = String(chunk);
@@ -212,4 +279,19 @@ export async function renderVideo(opts: RenderOptions) {
   });
   await child;
   if (jobId) publish({ jobId, stage: 'done', progress: 1, message: '渲染完成', data: { output } });
+}
+
+/**
+ * 抽取视频指定时间点的单帧 jpg,作为前端框选用的预览图
+ */
+export async function snapshotFrame(input: string, time: number, output: string, maxWidth = 1280) {
+  await execa('ffmpeg', [
+    '-y',
+    '-ss', String(time),
+    '-i', input,
+    '-frames:v', '1',
+    '-vf', `scale=min(${maxWidth}\\,iw):-2`,
+    '-q:v', '3',
+    output,
+  ]);
 }

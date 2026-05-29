@@ -15,6 +15,7 @@ export default function ExportPanel() {
   const bgmPath = useStore((s) => s.bgmPath);
   const bgmVolume = useStore((s) => s.bgmVolume);
   const keepOriginalAudio = useStore((s) => s.keepOriginalAudio);
+  const watermarks = useStore((s) => s.watermarks);
   const stage = useStore((s) => s.stage);
   const message = useStore((s) => s.message);
   const progress = useStore((s) => s.progress);
@@ -45,6 +46,7 @@ export default function ExportPanel() {
         bgmVolume,
         keepOriginalAudio,
         remapSubtitles: true,
+        watermarks: watermarks.map((w) => ({ x: w.x, y: w.y, w: w.w, h: w.h, method: w.method })),
       });
       unsubRef.current = subscribeProgress(jobId, (e) => {
         if (e.stage === 'error') {
@@ -96,6 +98,12 @@ export default function ExportPanel() {
           <span>烧录字幕到画面</span>
           {cues.length === 0 && <span className="text-xs text-white/40">(无字幕)</span>}
         </label>
+
+        {watermarks.length > 0 && (
+          <div className="text-xs text-accent flex items-center gap-2">
+            <span>✓ 将去除 {watermarks.length} 个水印/文字区域</span>
+          </div>
+        )}
 
         {stage === 'rendering' && (
           <div className="bg-bg-card border border-border rounded-lg p-2">

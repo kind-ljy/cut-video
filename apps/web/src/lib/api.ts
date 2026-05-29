@@ -57,6 +57,11 @@ export async function autocut(args: {
   return j;
 }
 
+export interface WatermarkRegionPayload {
+  x: number; y: number; w: number; h: number;
+  method?: 'delogo' | 'blur' | 'pixelate';
+}
+
 export async function startRender(args: {
   input: string;
   output: string;
@@ -67,6 +72,7 @@ export async function startRender(args: {
   bgmVolume?: number;
   keepOriginalAudio?: boolean;
   remapSubtitles?: boolean;
+  watermarks?: WatermarkRegionPayload[];
 }): Promise<string> {
   const r = await fetch('/api/render', {
     method: 'POST',
@@ -76,6 +82,13 @@ export async function startRender(args: {
   const j = await r.json();
   if (!j.ok) throw new Error(j.error);
   return j.jobId;
+}
+
+export async function snapshot(path: string, t = 0): Promise<string> {
+  const r = await fetch(`/api/snapshot?path=${encodeURIComponent(path)}&t=${t}`);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error);
+  return j.snapshotPath as string;
 }
 
 export interface ProgressEvent {

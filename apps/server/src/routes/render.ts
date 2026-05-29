@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { WORK_DIR } from '../config.js';
-import { renderVideo } from '../lib/ffmpeg.js';
+import { renderVideo, type WatermarkRegion } from '../lib/ffmpeg.js';
 import { cuesToSrt, type SubtitleCue } from '../lib/whisper.js';
 import { newJobId, publish } from '../lib/progress.js';
 
@@ -19,6 +19,8 @@ interface RenderBody {
    * 当 cues 是相对原始视频的时间戳时,需要按 segments 重新对齐到剪辑后视频
    */
   remapSubtitles?: boolean;
+  /** 要去除的水印区域(像素坐标,基于源视频) */
+  watermarks?: WatermarkRegion[];
 }
 
 export default async function renderRoute(app: FastifyInstance) {
@@ -54,6 +56,7 @@ export default async function renderRoute(app: FastifyInstance) {
           bgmPath: body.bgmPath ?? null,
           bgmVolume: body.bgmVolume ?? 0.3,
           keepOriginalAudio: body.keepOriginalAudio ?? true,
+          watermarks: body.watermarks ?? [],
           jobId,
         });
       } catch (e: any) {

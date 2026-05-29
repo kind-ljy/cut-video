@@ -10,6 +10,7 @@ import transcribeRoute from './routes/transcribe.js';
 import autocutRoute from './routes/autocut.js';
 import renderRoute from './routes/render.js';
 import filesRoute from './routes/files.js';
+import snapshotRoute from './routes/snapshot.js';
 
 const app = Fastify({
   logger: { level: 'info' },
@@ -34,6 +35,7 @@ await app.register(async (api) => {
   await api.register(autocutRoute);
   await api.register(renderRoute);
   await api.register(filesRoute);
+  await api.register(snapshotRoute);
 }, { prefix: '/api' });
 
 app.listen({ port: PORT, host: '127.0.0.1' })

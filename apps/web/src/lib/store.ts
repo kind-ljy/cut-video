@@ -3,13 +3,18 @@ import type { ProbeInfo, SubtitleCue } from './api';
 
 export type Stage = 'idle' | 'transcribing' | 'transcribed' | 'rendering' | 'done' | 'error';
 
+export interface WatermarkRegion {
+  id: string;
+  x: number; y: number; w: number; h: number;       // 像素坐标(基于源视频)
+  method: 'delogo' | 'blur' | 'pixelate';
+  label?: string;
+}
+
 interface State {
   inputPath: string | null;
   info: ProbeInfo | null;
   cues: SubtitleCue[];
-  // 字幕段是否启用(对应 cue index -> bool)
   cueEnabled: boolean[];
-  // 自动剪辑规则
   rules: {
     removeSilence: boolean;
     silencePadding: number;
@@ -18,15 +23,16 @@ interface State {
   segments: [number, number][];
   stats: { keptDuration: number; removedDuration: number; clipCount: number } | null;
 
-  // 音频
   bgmPath: string | null;
   bgmVolume: number;
   keepOriginalAudio: boolean;
 
-  // 字幕导出
   burnSubtitle: boolean;
 
-  // 输出
+  // 去水印
+  watermarks: WatermarkRegion[];
+  watermarkMethod: 'delogo' | 'blur' | 'pixelate';
+
   outputPath: string;
 
   stage: Stage;
@@ -45,6 +51,11 @@ interface State {
   setBgm(p: { path?: string | null; volume?: number; keepOriginal?: boolean }): void;
   setBurnSubtitle(b: boolean): void;
   setOutputPath(p: string): void;
+  addWatermark(r: Omit<WatermarkRegion, 'id'>): void;
+  updateWatermark(id: string, p: Partial<WatermarkRegion>): void;
+  removeWatermark(id: string): void;
+  clearWatermarks(): void;
+  setWatermarkMethod(m: 'delogo' | 'blur' | 'pixelate'): void;
   setStage(s: Stage, msg?: string, progress?: number): void;
   setProgress(p: number, msg?: string): void;
   setError(e: string | null): void;
@@ -68,6 +79,8 @@ const initial = {
   bgmVolume: 0.3,
   keepOriginalAudio: true,
   burnSubtitle: true,
+  watermarks: [] as WatermarkRegion[],
+  watermarkMethod: 'delogo' as 'delogo' | 'blur' | 'pixelate',
   outputPath: '',
   stage: 'idle' as Stage,
   progress: 0,
@@ -86,6 +99,7 @@ export const useStore = create<State>((set, get) => ({
       info,
       outputPath: `${stem}_cut.mp4`,
       cues: [], cueEnabled: [], segments: [], stats: null,
+      watermarks: [],
       stage: 'idle', progress: 0, message: '', error: null, resultPath: null,
     });
   },
@@ -116,6 +130,26 @@ export const useStore = create<State>((set, get) => ({
   },
   setBurnSubtitle(b) { set({ burnSubtitle: b }); },
   setOutputPath(p) { set({ outputPath: p }); },
+  addWatermark(r) {
+    const id = `wm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    set({ watermarks: [...get().watermarks, { ...r, id }] });
+  },
+  updateWatermark(id, p) {
+    set({
+      watermarks: get().watermarks.map((w) => (w.id === id ? { ...w, ...p } : w)),
+    });
+  },
+  removeWatermark(id) {
+    set({ watermarks: get().watermarks.filter((w) => w.id !== id) });
+  },
+  clearWatermarks() { set({ watermarks: [] }); },
+  setWatermarkMethod(m) {
+    // 同时把现有的所有水印改成新方法
+    set({
+      watermarkMethod: m,
+      watermarks: get().watermarks.map((w) => ({ ...w, method: m })),
+    });
+  },
   setStage(stage, message = '', progress = 0) { set({ stage, message, progress }); },
   setProgress(progress, message) { set({ progress, ...(message ? { message } : {}) }); },
   setError(error) { set({ error, stage: error ? 'error' : get().stage }); },
